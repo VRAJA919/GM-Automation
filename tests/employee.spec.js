@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { getToken } = require('./webservice-check.spec');
+const { getToken } = require('./utils');
 
 function getEmployeeUrl(env) {
   if (env === 'GQ1') return 'https://gq1.road.com/wsapi/v4/employees';
@@ -9,7 +9,9 @@ function getEmployeeUrl(env) {
 }
 
 async function runEmployeeTest(request, env) {
-  const token = await getToken(request, env);
+  const tokenObj = await getToken(request, env);
+  const token = tokenObj.bearer || tokenObj;
+  console.log(`Using token for ${env}:`, token);
   const now = new Date();
   const pad = n => n.toString().padStart(2, '0');
   const timeStr = `${pad(now.getDate())}${pad(now.getMonth()+1)}${now.getFullYear()}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
@@ -52,37 +54,82 @@ async function runEmployeeTest(request, env) {
   };
 
   // POST new employee
-  const postResponse = await request.post(
-    getEmployeeUrl(env),
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      data: postBody,
+  let postResult;
+  try {
+    const postHeaders = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    console.log(`POST headers for ${env}:`, postHeaders);
+    const postResponse = await request.post(
+      getEmployeeUrl(env),
+      {
+        headers: postHeaders,
+        data: postBody,
+      }
+    );
+    const rawText = await postResponse.text();
+    console.log(`POST employees API ${env} raw response:`, rawText);
+    try {
+      postResult = JSON.parse(rawText);
+      console.log(`POST employees API ${env} result:`, JSON.stringify(postResult, null, 2));
+    } catch (err) {
+      throw new Error(`POST response is not valid JSON for ${env}. See raw response above.`);
     }
-  );
-  const postResult = await postResponse.json();
-  console.log(`POST employees API ${env} result:`, JSON.stringify(postResult, null, 2));
-  expect(postResponse.ok()).toBeTruthy();
+    expect(postResponse.ok()).toBeTruthy();
+  } catch (err) {
+    console.error(`POST employees API ${env} error:`, err);
+    throw err;
+  }
 
   // GET to verify creation
-  const getResponse = await request.get(
-    getEmployeeUrl(env),
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Accept': 'application/json',
-      },
+  let created;
+  try {
+    const getResponse = await request.get(
+      getEmployeeUrl(env),
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Accept': 'application/json',
+        },
+      }
+    );
+    const getData = await getResponse.json();
+    created = getData.employees?.find(e => e.uId?.emailAdrs === email);
+    console.log(`GET employees API ${env} created:`, JSON.stringify(created, null, 2));
+    expect(created).toBeDefined();
+    expect(getResponse.ok()).toBeTruthy();
+  } catch (err) {
+    console.error(`GET employees API ${env} error:`, err);
+    throw err;
+  }
+
+  // DELETE the created employee
+  if (created && created.tId) {
+    try {
+      const deleteResponse = await request.delete(
+        getEmployeeUrl(env) + '/' + created.tId,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+      let deleteResult;
+      try {
+        const text = await deleteResponse.text();
+        deleteResult = text ? JSON.parse(text) : '[empty response]';
+      } catch (e) {
+        deleteResult = '[invalid or empty JSON]';
+      }
+      console.log(`DELETE employees API ${env} result:`, deleteResult);
+      expect(deleteResponse.ok()).toBeTruthy();
+    } catch (err) {
+      console.error(`DELETE employees API ${env} error:`, err);
+      throw err;
     }
-  );
-  const getData = await getResponse.json();
-  // Find the created employee by email
-  const created = getData.employees?.find(e => e.uId?.emailAdrs === email);
-  console.log(`GET employees API ${env} created:`, JSON.stringify(created, null, 2));
-  expect(created).toBeDefined();
-  expect(getResponse.ok()).toBeTruthy();
+  }
 }
 
 test('employees API for GQ1', async ({ request }) => {
