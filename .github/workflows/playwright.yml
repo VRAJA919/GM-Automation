@@ -1,11 +1,14 @@
-name: Playwright Tests
+name: Playwright Tests  # Workflow name
 
+# Step 1: Triggers
 on:
-  push:
+  workflow_dispatch:     # Manual trigger
+  pull_request:          # Run on PRs
     branches: [ main ]
-  pull_request:
+  push:                  # Optional: run on push
     branches: [ main ]
 
+# Step 2: Workflow jobs
 jobs:
   test:
     runs-on: ubuntu-latest
